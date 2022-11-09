@@ -1,0 +1,29 @@
+---
+ansible_user: skay
+
+# MySQL Setup
+mysql_db: laravel
+mysql_user: skay
+mysql_pass: passwd
+
+# Web Server Setup
+web_root_dir: /var/www/
+laravel_app: laravel
+document_root: "{{ web_root_dir }}/{{ laravel_app }}/public"
+github_repo: https://github.com/f1amy/laravel-realworld-example-app.git
+
+# Laravel Env Variables
+app_name: laravel
+app_env: local
+app_debug: true
+app_url: http://paulskay.me
+db_host: localhost
+db_port: 3306
+db_database: laravel
+db_user: skay
+db_pass: passwd
+
+# Certbot credentials
+mydomain: paulskay.me
+mydomain_alias: www.paulskay.me
+myemail: "mailpaulskay@yahoo.co.uk"

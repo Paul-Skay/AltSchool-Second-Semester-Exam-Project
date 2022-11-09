@@ -1,0 +1,260 @@
+---
+- name: Install LAMP Stack to deploy Laravel app
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - vars.yml
+  
+  tasks:
+  # Initial server setup
+    - name: Upgrade System
+      apt: upgrade=dist update_cache=yes force=yes
+       
+    - name: Set Timezone
+      timezone:
+        name: Africa/Lagos
+
+    - name: Install required tools
+      apt: name={{ item }} update_cache=yes state=latest
+      loop: [ 'git', 'unzip', ]
+
+    - name: Allow SSH connection
+      community.general.ufw:
+        rule: allow
+        name: OpenSSH
+
+    - name: Allow HTTP on port 80 for Apache
+      community.general.ufw:
+        rule: allow
+        port: '80'
+        proto: tcp
+
+    - name: Allow HTTPS on port 443 for Apache
+      ufw:
+        rule: allow
+        port: '443'
+        proto: tcp
+
+    - name: Enable UFW
+      ufw: state=enabled
+
+  # Install and setup application database  
+    - name: Installing mysql and it's dependencies
+      vars:
+        ansible_python_interpreter: /usr/bin/python3
+      package:
+        name: "{{item}}"
+        state: present
+        update_cache: yes
+      loop:
+        - mysql-server
+        - mysql-client 
+        - python3-mysqldb
+        - libmysqlclient-dev
+
+    - name: Start and enable mysql service
+      service:
+        name: mysql
+        state: started
+        enabled: yes
+
+    - name: Creating mysql user
+      mysql_user:
+        name: "{{ mysql_user }}"
+        password: "{{ mysql_pass }}"
+        priv: '*.*:ALL'
+        host: '%'
+        state: present
+
+    - name: Creating database
+      mysql_db:
+        name: "{{ mysql_db }}"
+        state: present
+
+    - name: Enable remote login to mysql
+      lineinfile:
+          path: /etc/mysql/mysql.conf.d/mysqld.cnf
+          regexp: '^bind-address'
+          line: 'bind-address = 0.0.0.0'
+          backup: yes
+
+      notify:
+          - Restart mysql
+
+  # Install PHP
+    - name: Add php repository
+      apt_repository:
+        repo: 'ppa:ondrej/php'
+
+    - name: Installing php and dependencies
+      apt:
+        name: "{{item}}" 
+        update_cache: true 
+        state: present
+      loop:
+        - php8.1
+        - libapache2-mod-php
+        - php8.1-mysql
+        - php8.1-common
+        - php8.1-xml
+        - php8.1-xmlrpc
+        - php8.1-curl
+        - php8.1-gd
+        - php8.1-imagick
+        - php8.1-cli
+        - php8.1-dev
+        - php8.1-imap
+        - php8.1-mbstring
+        - php8.1-opcache
+        - php8.1-soap
+        - php8.1-zip
+        - php8.1-intl
+    
+  # Download laravel dependency manager; Composer.
+    - name: Download php-composer
+      get_url:
+        url: https://getcomposer.org/installer
+        dest: /tmp/installer
+
+    - name: Install composer
+      shell: cat /tmp/installer | php -- --install-dir=/usr/local/bin
+      args:
+        creates: /usr/local/bin/composer
+
+    - name: Rename composer.phar to composer
+      shell: mv /usr/local/bin/composer.phar /usr/local/bin/composer
+      args:
+        creates: /usr/local/bin/composer
+
+    - name: Make composer executable
+      file: 
+        path: /usr/local/bin/composer
+        mode: a+x
+        state: file
+      become: yes
+
+  # Downloading and setting up application on server
+    - name: Clone project repository from Github
+      git: >
+        repo="{{ github_repo }}"
+        dest="{{ web_root_dir }}/{{ laravel_app }}"
+        force=yes
+        accept_hostkey=yes update=yes  
+
+    - name: Make sure the remote app root exists and has the right permissions
+      file:
+        path: "{{ web_root_dir }}/{{ laravel_app }}"
+        state: directory
+        mode: '0775'
+        owner: "{{ ansible_user }}"
+        group: www-data
+        recurse: yes
+      become: yes
+
+    - name: Set up additional directory permissions for www-data group on storage folder
+      file:
+        path: "{{ web_root_dir }}/{{ laravel_app }}/storage/"
+        state: directory
+        mode: '0775'
+        group: www-data
+        recurse: yes
+      become: yes  
+
+    - name: Set up additional directory permissions for www-data group on bootstrap/cache folder
+      file:
+        path: "{{ web_root_dir }}/{{ laravel_app }}/bootstrap/cache/"
+        state: directory
+        mode: '0775'
+        group: www-data
+        recurse: yes
+      become: yes
+
+    - name: Install apache2 server
+      apt:
+        name: apache2
+        state: present
+
+    - name: Create apache virtual hosts for app
+      template: src="{{ laravel_app }}.conf" dest="/etc/apache2/sites-available/{{ laravel_app }}.conf" owner=www-data group=www-data mode=0644
+
+    - name: Enable site
+      command: sudo a2ensite "{{ laravel_app }}.conf"
+
+    - name: Enable the Apache rewrite module
+      command: sudo a2enmod rewrite
+
+    - name: Remove default apache vhost config from sites-enabled
+      file: name=/etc/apache2/sites-enabled/000-default.conf state=absent
+
+      notify:
+        - Restart apache2
+
+    - name: Install project dependencies with composer
+      shell: composer install 
+      args:
+        chdir: "{{ web_root_dir }}/{{ laravel_app }}"
+      become: false
+
+    - name: Copy project configuration file
+      copy:
+        src: .env
+        dest: "{{ web_root_dir }}/{{ laravel_app }}/.env"
+        owner: "{{ ansible_user }}"
+        group: www-data
+        mode: '0775'
+      become: yes
+
+    - name: Edit web.php file
+      blockinfile:
+        path: "{{ web_root_dir }}/{{ laravel_app }}/routes/web.php"
+        block: |
+          Route::get('/', function () {
+            return view('welcome');
+          });
+
+    - name: Migrate + seed database
+      shell: |
+          cd "{{ web_root_dir }}/{{ laravel_app }}"
+          php artisan key:generate
+          php artisan config:cache
+          php artisan migrate --seed
+      become: false
+
+    - name: Install Certbot's apache package
+      apt:
+        name: python3-certbot-apache
+        state: present
+
+    - name: Check if certificate already exists.
+      stat:
+        path: /etc/letsencrypt/live/"{{ mydomain }}"/cert.pem
+      register: letsencrypt_cert
+      with_items:
+        - {servername: "{{ mydomain }}", serveralias: "{{ mydomain_alias }}", documentroot: "{{ document_root }}"}
+
+    - name: Stop apache services to allow certbot to generate a certificate
+      service:
+        name: apache2
+        state: stopped
+
+    - name: Generate new certificate if one doesn't exist.
+      shell: "certbot certonly --standalone --noninteractive --agree-tos --email {{ myemail }} -d {{ mydomain }} -d {{ mydomain_alias }}"
+      with_items: "{{ letsencrypt_cert.results }}"
+      when: item.stat.exists == False
+
+    - name: Start apache services after cert. has been generated.
+      service:
+        name: apache2
+        state: started
+
+  handlers:
+    - name: Restart apache2
+      service:
+        state: restarted
+        name: apache2
+        daemon_reload: yes
+
+    - name: Restart mysql
+      service:
+        name: mysql
+        state: restarted       

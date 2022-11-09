@@ -14,10 +14,6 @@
       timezone:
         name: Africa/Lagos
 
-    - name: Install required tools
-      apt: name={{ item }} update_cache=yes state=latest
-      loop: [ 'git', 'unzip', ]
-
     - name: Allow SSH connection
       community.general.ufw:
         rule: allow
@@ -51,12 +47,6 @@
         - mysql-client 
         - python3-mysqldb
         - libmysqlclient-dev
-
-    - name: Start and enable mysql service
-      service:
-        name: mysql
-        state: started
-        enabled: yes
 
     - name: Creating mysql user
       mysql_user:
@@ -95,20 +85,18 @@
         - php8.1
         - libapache2-mod-php
         - php8.1-mysql
-        - php8.1-common
         - php8.1-xml
         - php8.1-xmlrpc
         - php8.1-curl
         - php8.1-gd
         - php8.1-imagick
-        - php8.1-cli
         - php8.1-dev
         - php8.1-imap
         - php8.1-mbstring
-        - php8.1-opcache
         - php8.1-soap
-        - php8.1-zip
         - php8.1-intl
+        - php8.1-zip
+        - unzip
     
   # Download laravel dependency manager; Composer.
     - name: Download php-composer
@@ -121,17 +109,10 @@
       args:
         creates: /usr/local/bin/composer
 
-    - name: Rename composer.phar to composer
+    - name: Move composer to global path
       shell: mv /usr/local/bin/composer.phar /usr/local/bin/composer
       args:
         creates: /usr/local/bin/composer
-
-    - name: Make composer executable
-      file: 
-        path: /usr/local/bin/composer
-        mode: a+x
-        state: file
-      become: yes
 
   # Downloading and setting up application on server
     - name: Clone project repository from Github
@@ -169,7 +150,7 @@
         recurse: yes
       become: yes
 
-    - name: Install apache2 server
+    - name: Install apache2 web server
       apt:
         name: apache2
         state: present
@@ -238,7 +219,7 @@
         state: stopped
 
     - name: Generate new certificate if one doesn't exist.
-      shell: "certbot certonly --standalone --noninteractive --agree-tos --email {{ myemail }} -d {{ mydomain }} -d {{ mydomain_alias }}"
+      shell: "certbot certonly --standalone --noninteractive --agree-tos --email {{ myemail }} -d {{ mydomain }}"
       with_items: "{{ letsencrypt_cert.results }}"
       when: item.stat.exists == False
 

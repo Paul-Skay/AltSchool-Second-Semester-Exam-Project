@@ -16,7 +16,7 @@
 
     - name: Install required tools
       apt: name={{ item }} update_cache=yes state=latest
-      loop: [ 'unzip', ]
+      loop: [ 'git', 'unzip', ]
 
     - name: Allow SSH connection
       community.general.ufw:
@@ -51,6 +51,12 @@
         - mysql-client 
         - python3-mysqldb
         - libmysqlclient-dev
+
+    - name: Start and enable mysql service
+      service:
+        name: mysql
+        state: started
+        enabled: yes
 
     - name: Creating mysql user
       mysql_user:
@@ -115,10 +121,17 @@
       args:
         creates: /usr/local/bin/composer
 
-    - name: Move composer to global path
+    - name: Rename composer.phar to composer
       shell: mv /usr/local/bin/composer.phar /usr/local/bin/composer
       args:
         creates: /usr/local/bin/composer
+
+    - name: Make composer executable
+      file: 
+        path: /usr/local/bin/composer
+        mode: a+x
+        state: file
+      become: yes
 
   # Downloading and setting up application on server
     - name: Clone project repository from Github
@@ -156,7 +169,7 @@
         recurse: yes
       become: yes
 
-    - name: Install apache2  web server
+    - name: Install apache2 server
       apt:
         name: apache2
         state: present
@@ -225,7 +238,7 @@
         state: stopped
 
     - name: Generate new certificate if one doesn't exist.
-      shell: "certbot certonly --standalone --noninteractive --agree-tos --email {{ myemail }} -d {{ mydomain }}"
+      shell: "certbot certonly --standalone --noninteractive --agree-tos --email {{ myemail }} -d {{ mydomain }} -d {{ mydomain_alias }}"
       with_items: "{{ letsencrypt_cert.results }}"
       when: item.stat.exists == False
 
